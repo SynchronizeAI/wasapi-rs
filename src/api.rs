@@ -1774,8 +1774,17 @@ impl AudioCaptureClient {
             });
         }
         let len_in_bytes = nbr_frames_returned as usize * self.bytes_per_frame;
-        let bufferslice = unsafe { slice::from_raw_parts(buffer_ptr, len_in_bytes) };
-        data[..len_in_bytes].copy_from_slice(bufferslice);
+        // Synchronize modification: WASAPI may return a null data pointer for SILENT.
+        // The native contract defines those frames as zeros; never form a null slice.
+        if buffer_info.flags.silent {
+            data[..len_in_bytes].fill(0);
+        } else if buffer_ptr.is_null() {
+            unsafe { self.client.ReleaseBuffer(nbr_frames_returned)? };
+            return Err(WasapiError::DataLengthTooShort { received: 0, expected: len_in_bytes });
+        } else {
+            let bufferslice = unsafe { slice::from_raw_parts(buffer_ptr, len_in_bytes) };
+            data[..len_in_bytes].copy_from_slice(bufferslice);
+        }
         if nbr_frames_returned > 0 {
             unsafe { self.client.ReleaseBuffer(nbr_frames_returned)? };
         }
